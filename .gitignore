@@ -1,0 +1,14 @@
+*
+
+!.gitignore
+
+!chunkedReceiver.py
+!chunkedReceiverDelimited.py
+!commander.py
+!inference1_gdino.py
+!inference2_clipseg.py
+!primitiveActions.py
+
+!phi3mini-q4.ipynb
+!cvChainTest.ipynb
+!cvChainTest_fastsam.ipynb
