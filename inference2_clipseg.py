@@ -59,6 +59,7 @@ class Inference1(PrimitiveActions):
 		cv.moveWindow('arm_vision', 100, 100)
 		cv.namedWindow('vlm_preview', cv.WINDOW_AUTOSIZE)
 		cv.moveWindow('vlm_preview', 100, 420)
+		# cv.namedWindow('depth_compute', cv.WINDOW_AUTOSIZE)
 
 		return None
 	
@@ -117,21 +118,21 @@ class Inference1(PrimitiveActions):
 	def inferTask(self, taskMsg) -> list|None: # LLM Inference
 		cleanOutput = None
 		prompt = '''
-			Your job is to extract actions and objects from the given task and invoke the allowed functions sequentially. Answer only with action.ignore() if no appropriate function available or you don't know what to do.
-			Do not greet, comment, explain, or elaborate your thought processes. Split the task in as many as sub-actions possible. Use semicolon to seperate the function calls.
-			Always recognise task language and translate the task and the object name to English.
-			Allowed functions are: action.pick(), action.pick_place(), action.ignore()
-			\nExample 1:
-			Task: Pick up banana and place on the plate.
-			Answer: action.pick_place("banana", "plate")
-			\nExample 2:
-			Task: Pickup the blue box.
-			Answer: action.pick("blue box")
-			\nNow translate to English and answer for Task: ''' + taskMsg
+			<|user|>\nYour job is to extract actions and objects from the given task and invoke the allowed functions sequentially. Answer only with action.ignore() if no appropriate function available or you don't know what to do.
+			Do not greet, comment, explain, or elaborate your thought processes. Split the task in as many as sub-actions possible. Use semicolon to seperate the function calls. python required.
+			Always recognise task language and translate the task and the object name to English. Always check if the function is allowed.
+			Allowed functions are: action.pick(object_name), action.pick_place(object_name, target_location), action.ignore()
+			\n<|user|>Example 1:
+			Task: Pick grapes and keep it on the plate.<|end|>
+			\n<|assistant|>action.pick_place("grapes", "plate")<|end|>
+			\n<|user|>Example 2:
+			Task: Pickup the grapes.<|end|>
+			\n<|assistant|>action.pick("grapes")<|end|>
+			\nNow translate to English and answer for task: ''' + taskMsg + '<|end|>\n<|assistant|>'
 
 		start_time = time.perf_counter()
 		llmOutput = self.llm(
-			f"<|user|>\n{prompt}<|end|>\n<|assistant|>",
+			prompt=prompt,
 			max_tokens=160,  # Generate up to 256 tokens
 			stop=["<|end|>"],
 			echo=False,
@@ -146,7 +147,7 @@ class Inference1(PrimitiveActions):
 			if newLineIdx != -1:
 				cleanOutput = cleanOutput[:newLineIdx]
 
-			cleanOutput = re.sub('[^A-Za-z0-9\"\':\{\}\[\]\_\-\,\.\(\)\;\s]+', '', cleanOutput).strip()
+			cleanOutput = re.sub('[^A-Za-z0-9\"\':\{\}\[\]\_\-\,\.\(\)\;\s]+', '', cleanOutput).strip().lower()
 			cleanOutput = cleanOutput.split(';')
 			cleanOutput = [a.strip() for a in cleanOutput if a != ''] # filters empty strings and removes edge whitespaces
 
@@ -288,6 +289,7 @@ class Inference1(PrimitiveActions):
 					),
 					axis=1
 				))
+				# cv.imshow('depth_compute', self.vlm_depth_compute_frame)
 				cv.waitKey(1)
 
 			except Exception as e:
