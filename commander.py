@@ -1,19 +1,34 @@
 import socket
 import threading
+import json
+import time
+from datetime import datetime
 
 class Commander:
-	def __init__(self):
-		# self.HOST_IP = '192.168.1.114'
-		# self.HOST_IP = '192.168.1.100'
-		self.HOST_IP = '10.1.1.100'
+	def __init__(self, HOST_IP: str):
+		self.HOST_IP = HOST_IP
 		self.HOST_PORT = 9999
 		self.ENCODING_FORMAT = 'utf-8'
+		self.HEADER_SIZE = 64
+		self.DELIMITER = '[CMD]'
+		self.LOG_DIR_PATH = "./data_recordings/"
 
 		self.cmdlink_socket = None
+		self.log_file = None
+		self.log_file_name = ''
+		self.script_start_time = None
+
 
 
 	def initCommandLink(self, doManualCmd = False):
 		print('Command link started')
+		dt = datetime.now().strftime("%d-%b-%Y__%H-%M-%S")
+		self.log_file_name = self.LOG_DIR_PATH + "actionLog__" + dt + ".csv"
+		self.log_file = open(self.log_file_name, "a")
+		print("--- writing to file: %s\n" % self.log_file_name)
+		self.log_file.write('elapsedSec,x,y,z,gripper\n')
+
+		self.script_start_time = time.perf_counter()
 		self.cmdlink_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 		socket_address = (self.HOST_IP, self.HOST_PORT)
 
@@ -30,12 +45,12 @@ class Commander:
 		return None
 	
 
-
-	def awaitCommandFeedback(self) -> str:
-		# not continuous to enable blocking, call when required
+	
+	def _awaitCommandFeedback(self) -> str:
+		# enables blocking
 		try:
 			print('[awaiting cmd feedback]')
-			respMsg = self.cmdlink_socket.recv(8).decode(encoding=self.ENCODING_FORMAT)
+			respMsg = self.cmdlink_socket.recv(self.HEADER_SIZE).decode(encoding=self.ENCODING_FORMAT)
 			print('[cmd feedback: %s]' % respMsg)
 			return respMsg
 		
@@ -56,15 +71,38 @@ class Commander:
 
 
 
-	def sendCommand(self, command: str|tuple):
+	def sendCommand(self, command: str|tuple, awaitFeedback = False) -> str|None:
 		if type(command) == tuple:
 			# convert to string
 			command = '%.2f %.2f %.2f %.2f' % command[:] # does not change original
+		
+		if (self.log_file != None and command != 'quit'):
+			# CSV struct: elapsedSec, x, y, z, gripper
+			csvEntry = str(round(time.perf_counter() - self.script_start_time, 3)) + ','
+			csvEntry += command.replace(' ', ',') + '\n' # replace space with comma for valid CSV
+			self.log_file.write(csvEntry)
+			self.log_file.flush()
+
+		command = json.dumps(obj={
+			"pose": command,
+			"feedback": awaitFeedback
+		})
+		print('sending cmd: \n|>\t%s' % command)
+		command = command.encode(encoding=self.ENCODING_FORMAT) # max len is 50ch
+
+		lengthDescriptor = (self.DELIMITER + str(len(command))).encode(encoding=self.ENCODING_FORMAT)
+		lengthDescriptor += b'.' * (8 - len(lengthDescriptor)) # fixed 8 byte descriptor
+
+		command = lengthDescriptor + command
+		command += b'.' * (self.HEADER_SIZE - len(command)) # fixed HEADER_SIZE size, by adding trailing bytes
 
 		try:
 			if self.cmdlink_socket:
-				print('sending cmd: \t'+command)
-				self.cmdlink_socket.sendall(command.encode(encoding=self.ENCODING_FORMAT))
+				self.cmdlink_socket.sendall(command)
+				if awaitFeedback == True:
+					return self._awaitCommandFeedback()
+				return None
+			
 			else:
 				raise Exception('socket unavailable!')
 		except Exception as e:
@@ -75,6 +113,10 @@ class Commander:
 	
 	def closeLink(self) -> None:
 		print('Quitting commander...')
+		if(self.log_file != None):
+			self.log_file.close()
+			print("\n\n--- closed file: %s\n\n" % self.log_file_name)
+
 		if self.cmdlink_socket != None:
 			try:
 				self.cmdlink_socket.shutdown(socket.SHUT_RDWR)
@@ -89,4 +131,3 @@ if (__name__ == '__main__'):
 	print('COMMANDER: Starting in manual command mode.')
 	cmndr = Commander()
 	threading.Thread(target=cmndr.initCommandLink, kwargs={'doManualCmd': True}).start()
-	# cmndr.initCommandFeedbackReceiver()

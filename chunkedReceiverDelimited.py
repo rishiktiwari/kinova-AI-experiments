@@ -1,6 +1,7 @@
 import socket, pickle, json
 import cv2 as cv
 import numpy as np
+from time import sleep
 
 # HOST_IP = '192.168.1.114'
 HOST_IP = '10.1.1.100'
@@ -64,15 +65,15 @@ def data_link():
 					print(e)
 					print('data parse/preview failed')
 
-	except Exception as e:
+	except Exception or KeyboardInterrupt as e:
 		print(e)
 		print('Data link failed, closing')
-	except KeyboardInterrupt:
-		pass
-
-	endScript = True
-	datalink_socket.shutdown(socket.SHUT_RDWR)
-	datalink_socket.close()
+	finally:
+		endScript = True
+		datalink_socket.sendall('quit'.encode(encoding='utf-8'))
+		sleep(0.5)
+		datalink_socket.shutdown(socket.SHUT_RDWR)
+		datalink_socket.close()
 
 
 print("Starting data link...")

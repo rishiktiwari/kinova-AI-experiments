@@ -13,7 +13,6 @@ from queue import Queue
 
 # llm stuff
 import torch
-# from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from llama_cpp import Llama
 
 # custom class
@@ -22,15 +21,16 @@ from primitiveActions import PrimitiveActions
 
 
 class Inference1(PrimitiveActions):
+	# HOST_IP = '192.168.1.114'
+	# HOST_IP = '192.168.1.100'
+	HOST_IP = '10.1.1.100'
+	DATA_PORT = 9998
+	CHUNK_SIZE = 1024 # increasing makes it unreliable
+	ENCODING_FORMAT = 'utf-8'
+	PACK_FLAG = "[PACKET]"
+
 	def __init__(self):
-		super().__init__()
-		# self.HOST_IP = '192.168.1.114'
-		# self.HOST_IP = '192.168.1.100'
-		self.HOST_IP = '10.1.1.100'
-		self.DATA_PORT = 9998
-		self.CHUNK_SIZE = 1024 # increasing makes it unreliable
-		self.ENCODING_FORMAT = 'utf-8'
-		self.PACK_FLAG = "[PACKET]"
+		super().__init__(self.HOST_IP)
 
 		self.window = tk.Tk()
 		self.window.title("Command Kinova Arm")
@@ -41,8 +41,9 @@ class Inference1(PrimitiveActions):
 		self.humanCmdInput = tk.Entry(width=50, font=('Courier', '16'))
 		self.humanCmdInput.pack()
 		tk.Button(text="Send", command=self.getCmdEntryVal).pack()
-		tk.Button(text="Cancel Task", command=self.resetFlagsAndParams).pack()
 		self.window.bind('<Return>', self.getCmdEntryVal)
+		tk.Button(text="Cancel Task", command=self.resetFlagsAndParams).pack()
+		tk.Button(text="Quit", command=self.cleanExit).pack()
 
 		self.socket_buffer = ''
 		self.package_queue = Queue()
@@ -90,8 +91,10 @@ class Inference1(PrimitiveActions):
 			id_name = m.body[0].value.func.value.id
 			def_name = m.body[0].value.func.attr
 
-			# hardcoded and assumed class object is in variable named: action
+			# hardcoded and assumed class object is in variable named: action, check LLM params count equal to required params
 			if (id_name != 'action' or len(m_args) != PrimitiveActions.REQUIRED_ARGS[def_name]):
+				for arg in m_args:
+					if arg.strip() == '': return False # empty params not allowed
 				return False
 		except Exception as e:
 			print('pythonic check err: ', e)
@@ -205,11 +208,12 @@ class Inference1(PrimitiveActions):
 
 
 
-	def cleanExit(self):
-		self.endScript = True
-		self.resetFlagsAndParams()
-		self.cmndr.sendCommand('quit') # closes remote socket
-		self.cmndr.closeLink()
+	def cleanExit(self, evt = None):
+		if self.endScript == False: #to prevent recursive calls
+			self.endScript = True
+			self.resetFlagsAndParams()
+			self.cmndr.sendCommand('quit') # closes remote socket
+			self.cmndr.closeLink()
 
 
 
@@ -225,16 +229,16 @@ class Inference1(PrimitiveActions):
 
 			pack_start = -1
 			pack_end = -1
+			pack_delimiter_len = len(self.PACK_FLAG)
 			while not self.endScript:
 				# await data length message
 				self.socket_buffer += datalink_socket.recv(self.CHUNK_SIZE).decode(encoding=self.ENCODING_FORMAT)
 
 				pack_start = self.getWordIndex(self.PACK_FLAG, self.socket_buffer)
-				pack_end = self.getWordIndex(self.PACK_FLAG, self.socket_buffer, pack_start+8) if (pack_start != -1) else -1
+				pack_end = self.getWordIndex(self.PACK_FLAG, self.socket_buffer, pack_start+pack_delimiter_len) if (pack_start != -1) else -1
 
 				if(pack_start != -1 and pack_end > pack_start):
 					package = self.socket_buffer[pack_start+self.CHUNK_SIZE : pack_end]; # skips first chunk - length descriptor
-					# print(package)
 					self.socket_buffer = self.socket_buffer[pack_end:] # remove this package from buffer
 					print('Full data rcvd, size: %d, in-buf: %d' % (len(package), len(self.socket_buffer)))
 					self.package_queue.put(package)
@@ -248,16 +252,17 @@ class Inference1(PrimitiveActions):
 			print('Keyboard interrupt')
 		finally:
 			print('Closing...')
-			# datalink_socket.sendall('quit')
-			datalink_socket.shutdown(socket.SHUT_RDWR)
-			datalink_socket.close()
+			datalink_socket.sendall('quit'.encode(encoding=self.ENCODING_FORMAT))
+			time.sleep(0.25) # for remote quit cmd to be rcvd
+			try:
+				datalink_socket.shutdown(socket.SHUT_RDWR)
+				datalink_socket.close()
+			except: pass
 			self.cleanExit()
 
 
 
 	def initServices(self):
-		action = PrimitiveActions()
-
 		while not self.endScript:
 			self.tkLabelVar.set(self.tkLabelCurrentText) # refreshes label text
 			self.window.update()
@@ -295,7 +300,7 @@ class Inference1(PrimitiveActions):
 			except Exception as e:
 				print(e)
 				print('data parse/preview failed')
-
+				
 			if (not self.isEnacting and not self.endScript and type(self.llmIntel) == Queue):
 				print('action available')	 
 				if self.llmIntel.qsize() != 0:
@@ -308,8 +313,6 @@ class Inference1(PrimitiveActions):
 
 					# start the primitive action function as thread
 					threading.Thread(target=action_def, args=action_args, daemon=False).start()
-			
-			time.sleep(0.1)
 
 
 
@@ -320,6 +323,25 @@ class Inference1(PrimitiveActions):
 
 
 if __name__ == '__main__':
+	print("""\n
+	+--------------------------------------------------------+
+	|                                                        |
+	|   ..::Victoria University, Melbourne, Australia::..    |
+	|                     -- May 2024 --                     |
+	|                                                        |
+	| LLM-CV powered robotic arm manipulator for Kinova Gen3 |
+	|                                                        |
+	| Developed by Rishik R. Tiwari                          |
+	|              techyrishik[at]gmail[dot]com              |
+	|                                                        |
+	| LLM: Microsoft Phi-3-mini-q4-GGUF                      |
+	| VLM: OpenAI CLIP                                       |
+	|                                                        |
+	| Tested on: Apple Macbook Pro (M1, 16GB)                |
+	| Remark: Stable 1Hz inference                           |
+	|                                                        |
+	+--------------------------------------------------------+
+	\n\n\n""")
 	print("Connecting to all links..")
 	inf = Inference1()
 	inf.launch()

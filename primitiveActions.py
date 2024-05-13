@@ -20,12 +20,14 @@ class PrimitiveActions:
 		'ignore': 0
 	}
 
-	GRIPPER_LENGTH_CM = 22
-	# DEPTH_OFFSET = -2.5 # real arm
-	DEPTH_OFFSET = 3 # sim
+	GRIPPER_LENGTH_CM = 22.5
+	# DEPTH_OFFSET = 3.5 # real arm
+	DEPTH_OFFSET = 2.5 # sim
 	CONTOUR_THRESHOLD = 178
+	# CONTOUR_THRESHOLD = 128
 
-	def __init__(self) -> None:
+	def __init__(self, HOST_IP: str) -> None:
+		self.HOST_IP = HOST_IP
 		VLM_CACHE_DIR = "/Users/rishiktiwari/AI/VLMs_test/hf_models"
 		VLM_NAME = "CIDAS/clipseg-rd64-refined"
 
@@ -33,7 +35,7 @@ class PrimitiveActions:
 		self.tkLabelCurrentText = self.TK_DEF_LABEL
 
 		self.cartPose = (0.3, 0.3, 0.3, 0.0) # to track past/current pose
-		self.cmndr = Commander()
+		self.cmndr = Commander(self.HOST_IP)
 		self.cmndr.initCommandLink()
 		self.cmndr.sendCommand(self.cartPose)
 
@@ -114,7 +116,7 @@ class PrimitiveActions:
 			'extremes_center': (0,0),	# ex, ey
 			'gripper_center': (0,0,0), 	# mx, my, tolPx
 			'grasp_estimate': 0.0,		# gripper position estimate from vision, 0 is full open, 1 is full close
-			'obj_mid_depth': 0.0		# scaled and corrected depth at automatically decided cx,cy or ex,ey or obj_seg_mean
+			'obj_mid_depth': math.nan		# scaled and corrected depth at automatically decided cx,cy or ex,ey or obj_seg_mean
 		}
 
 		# -- PREDICTION START --
@@ -147,7 +149,7 @@ class PrimitiveActions:
 			print('no obj contours found')
 			self.isDetecting = False
 			self.noObjFrames += 1
-			if self.noObjFrames == 6:
+			if self.noObjFrames == 5:
 				print('--- no objs, terminating action ---')
 				self.resetFlagsAndParams()
 			return None
@@ -166,8 +168,8 @@ class PrimitiveActions:
 		samples_count = len(self.bbox_samples)     # starts with 0, maxes at window size
 		# ox = sum(i[0] for i in self.bbox_samples)//samples_count
 		# oy = sum(i[1] for i in self.bbox_samples)//samples_count
-		ow = sum(i[2] for i in self.bbox_samples)//samples_count
-		oh = sum(i[3] for i in self.bbox_samples)//samples_count
+		# ow = sum(i[2] for i in self.bbox_samples)//samples_count
+		# oh = sum(i[3] for i in self.bbox_samples)//samples_count
 		cx = max(0, min(ox+(ow//2), rgbImage.shape[0]-1)) # clamp value 0 <= cx < image.shape[n]
 		cy = max(0, min(oy+(oh//2), rgbImage.shape[1]-1)) # clamp value 0 <= cy < image.shape[n]
 
@@ -196,7 +198,7 @@ class PrimitiveActions:
 		self.gripperEst_samples.append(round((rightmost[0]-leftmost[0])/120, 2))
 		self.gripperEst_samples = self.gripperEst_samples[-3:] # recent N values
 		samples_count = len(self.gripperEst_samples)
-		detail['grasp_estimate'] = min(1.0, max(0.5, round(sum(self.gripperEst_samples)/samples_count, 2))) # clamp value 0.5 <= grasp_estimate <= 1.0
+		detail['grasp_estimate'] = min(0.8, max(0.4, round(sum(self.gripperEst_samples)/samples_count, 2))) # clamp value 0.4 <= grasp_estimate <= 0.8
 
 		cv.circle(self.vlm_ann_rgbframe, leftmost, radius=3, color=(255,255,255), thickness=-1)
 		cv.circle(self.vlm_ann_rgbframe, rightmost, radius=3, color=(0,0,255), thickness=-1)
@@ -207,8 +209,10 @@ class PrimitiveActions:
 		# automatic object depth estimation using appropriate method
 		if not math.isnan(rawDepthImage[cx, cy]) and not math.isnan(rawDepthImage[ex, ey]):
 			# use the lowest depth value, to prevent any possible collisions/missalignments
-			detail['obj_mid_depth'] = self._rawDepthToCm( min(rawDepthImage[cx, cy], rawDepthImage[ex, ey]) )
-		else:
+			# detail['obj_mid_depth'] = self._rawDepthToCm( min(rawDepthImage[cx, cy], rawDepthImage[ex, ey]) )
+			detail['obj_mid_depth'] = self._rawDepthToCm( (rawDepthImage[cx, cy]+rawDepthImage[ex, ey])/2 ) #average
+			
+		if math.isnan(detail['obj_mid_depth']) or detail['obj_mid_depth'] < 0:
 			# fallback to seg mean
 			mean_region = np.array(rawDepthImage[leftmost[0]:rightmost[0], topmost[1]:bottommost[1]], dtype=np.float32)
 			if(mean_region.size > 0):
@@ -223,6 +227,7 @@ class PrimitiveActions:
 				else:
 					detail['obj_mid_depth'] = self._rawDepthToCm(min(masked_img.mean(), rawDepthImage[ex, ey])) # take min of exey or mean
 			else:
+				print('\t -- could not calculate depth')
 				detail['obj_mid_depth'] = math.nan
 		
 		print('> Object: %s, Mid: %.1fcm' % (objectName, detail['obj_mid_depth']))
@@ -251,8 +256,8 @@ class PrimitiveActions:
 		self.tkLabelCurrentText = 'Moving to home...'
 		print("\tmoving to home")
 		self.cartPose = (0.3, 0.3, 0.3, self.cartPose[3])
-		self.cmndr.sendCommand(self.cartPose) # move to home pose, retain gripper value
-		self.cmndr.awaitCommandFeedback()
+		self.cmndr.sendCommand(self.cartPose, awaitFeedback=True) # move to home pose, retain gripper value
+		time.sleep(3.0) #important, otherwise depth info is messed-up
 		return None
 
 
@@ -271,12 +276,10 @@ class PrimitiveActions:
 		self.tkLabelCurrentText = 'Placing object...'
 		print("\ttaking obj to place location")
 		self.cartPose = placePose
-		self.cmndr.sendCommand(self.cartPose) # move to place pose
-		self.cmndr.awaitCommandFeedback()
+		self.cmndr.sendCommand(self.cartPose, awaitFeedback=True) # move to place pose
 		print("\treleasing obj at place location")
 		self.cartPose = (placePose[0], placePose[1], placePose[2], 0.0)
-		self.cmndr.sendCommand(self.cartPose) # release obj
-		self.cmndr.awaitCommandFeedback()
+		self.cmndr.sendCommand(self.cartPose, awaitFeedback=True) # release obj
 		self.isPlacing = False
 		return None
 
@@ -354,17 +357,25 @@ class PrimitiveActions:
 			if self.grasped:
 				pickPose = tuple(nextPose)
 
-			self.cmndr.sendCommand(self.cartPose)
-			self.cmndr.awaitCommandFeedback() # awaits until command complete feedback is received
+			ackPose = self.cmndr.sendCommand(self.cartPose, awaitFeedback=True)
+			print('\tcur: ', self.cartPose, 'fdbk: ', ackPose)
+			try:
+				ackPose = np.asarray(ackPose.split(' '), dtype=float)
+				if len(ackPose) == 4: # has four values
+					self.cartPose = tuple(ackPose)
+			except Exception:
+				print('invalid ack rcvd.')
 
 		if pick_and_return == False:
 			return None
 
 		# takes obj to home, holds for some time and brings back to pick location
-		self._homeObjAndPlace(pickPose, pickPose, 10.0)
+		if pickPose != None:
+			self._homeObjAndPlace(pickPose, pickPose, 10.0)
+		
 		self.resetFlagsAndParams()
 		print('\taction complete')
-		return True
+		return None
 	
 
 
@@ -394,24 +405,31 @@ class PrimitiveActions:
 			self.cartPose = tuple(np.add(self.cartPose, (stepx, stepy, stepz, 0.0)))
 
 			mid_depth = vision['obj_mid_depth']
-			if (xAligned and yAligned and mid_depth < 1.5): # vertically aligned and reached dest
+			if (xAligned and yAligned and mid_depth < 3): # vertically aligned and reached dest
 				targetPose = list(self.cartPose) # list because have to set gripper pose after picking
 				print('> --- noted target pose (%.2f %.2f %.2f %.2f)' % self.cartPose)
-				#loop terminates after this iteration
+				break
 
-			self.cmndr.sendCommand(self.cartPose)
-			self.cmndr.awaitCommandFeedback() # awaits until command complete feedback is received
+			self.cmndr.sendCommand(self.cartPose, awaitFeedback=True)
 
 		self.tkLabelCurrentText = 'Found target pose...'
 		self._moveToHome() # take open gripper with nothing from target pose to home
 
-		self.pick(object_name, pick_and_return=False)
-		targetPose[3] = self.cartPose[3] # cartPose has pickPose, extract only gripper value
-		self._homeObjAndPlace(self.cartPose, tuple(targetPose))
+		if targetPose != None:
+			self.pick(object_name, pick_and_return=False)
+			targetPose[3] = self.cartPose[3] # cartPose has pickPose, extract only gripper value
+
+			# assuming that pick object is always at z:0, the pick_z can be considered as obj_height and be added to place_z to consider object height while placing.
+			targetPose[2] += self.cartPose[2]
+
+			self._homeObjAndPlace(self.cartPose, tuple(targetPose))
+
 		self.resetFlagsAndParams()
 		print('\taction complete')
+		return None
 
 
 
 	def ignore(self, *args) -> None:
 		print("Do nothing")
+		return None
