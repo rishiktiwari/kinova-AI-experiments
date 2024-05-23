@@ -2,6 +2,8 @@ import time
 import math
 import PIL
 import torch
+import json
+import pickle
 import numpy as np
 import cv2 as cv
 
@@ -14,6 +16,10 @@ from commander import Commander
 
 
 class PrimitiveActions:
+	CHUNK_SIZE = 1024 # increasing makes it unreliable
+	ENCODING_FORMAT = 'utf-8'
+	PACK_FLAG = "[PACKET]"
+
 	REQUIRED_ARGS = {
 		'pick': 1,
 		'pick_place': 2,
@@ -21,8 +27,8 @@ class PrimitiveActions:
 	}
 
 	GRIPPER_LENGTH_CM = 22.5
-	# DEPTH_OFFSET = 3.5 # real arm
-	DEPTH_OFFSET = 2.5 # sim
+	DEPTH_OFFSET = 0.5 # real arm
+	# DEPTH_OFFSET = 2.5 # sim
 	CONTOUR_THRESHOLD = 178
 	# CONTOUR_THRESHOLD = 128
 
@@ -38,6 +44,8 @@ class PrimitiveActions:
 		self.cmndr = Commander(self.HOST_IP)
 		self.cmndr.initCommandLink()
 		self.cmndr.sendCommand(self.cartPose)
+		self.datalink_socket = None
+		self.socket_buffer = ''
 
 		self.endScript = False
 		self.isEnacting = False
@@ -94,18 +102,62 @@ class PrimitiveActions:
 		
 		return depthFrameNormalised
 	
+
+	def _requestFreshDataFrame(self) -> bool:
+		print('\t--requesting new frame')
+		if (self.datalink_socket == None):
+			print('socket not available')
+			return False
+
+		pack_start = -1
+		pack_end = -1
+		pack_delimiter_len = len(self.PACK_FLAG)
+		buffer_len = 0
+		
+		self.datalink_socket.sendall('frame'.encode(encoding=self.ENCODING_FORMAT)) # triggers sending on remote
+
+		while not self.endScript:
+			# await data length message
+			self.socket_buffer += self.datalink_socket.recv(self.CHUNK_SIZE).decode(encoding=self.ENCODING_FORMAT)
+			buffer_len = len(self.socket_buffer)
+			pack_start = self.socket_buffer.find(self.PACK_FLAG, 0)
+
+			if (pack_start != -1 and buffer_len > pack_start+self.CHUNK_SIZE): # one complete chunk exists containing buffer len describer exists
+				total_data_len = int(self.socket_buffer[pack_start+pack_delimiter_len : self.CHUNK_SIZE].strip('.')) # extract total buffer len from first chunk of fixed CHUNK_SIZE in following format [delimiter]123....  
+				pack_end = pack_start+self.CHUNK_SIZE+total_data_len
+				
+				if (buffer_len >= pack_end):
+					package = self.socket_buffer[pack_start+self.CHUNK_SIZE : pack_end]; # skips first chunk - length descriptor
+					self.socket_buffer = self.socket_buffer[pack_end:] # remove this package from buffer
+					print('Full data rcvd, size: %d, in-buf: %d' % (len(package), len(self.socket_buffer)))
+					
+					try:
+						package = json.loads(package)
+						rgbd = pickle.loads(bytes(package['rgbd'], self.ENCODING_FORMAT), encoding='latin1')
+						self.rgbd_frame = rgbd
+						self.isFresh_rgbd = True
+						return True
+
+					except Exception as e:
+						print(e)
+						print('data parse/preview failed')
+		return False
+
 	
 
 	def _rawDepthToCm(self, rawDepthValue: float) -> float:
 		return float(rawDepthValue * 100 - (self.GRIPPER_LENGTH_CM + self.DEPTH_OFFSET))
 
 
+	
+	def _applyAndGetVisionDetail(self, objectName: str) -> dict|None:			
+		rgbImage = self.rgbd_frame[0]
+		rawDepthImage = self.rgbd_frame[1]
 
-	def _applyAndGetVisionDetail(self, rgbImage, rawDepthImage, objectName: str) -> dict|None:			
-		if not self.isFresh_rgbd or type(rgbImage) == None or type(rawDepthImage) == None:
+		if not self.isFresh_rgbd or rgbImage is None or rawDepthImage is None:
 			return None
-		
 		self.isFresh_rgbd = False
+		
 		colour = (0, 255, 0) # green
 		rgbFrameImg = PIL.Image.fromarray(rgbImage[:,:,::-1], mode='RGB')
 		detail = {
@@ -333,10 +385,10 @@ class PrimitiveActions:
 		pickPose = None
 
 		while (not self.endScript and not self.grasped and self.isEnacting):
-			rgbImage = self.rgbd_frame[0]
-			rawDepthImage = self.rgbd_frame[1]
+			start_time = time.perf_counter()
 
-			vision = self._applyAndGetVisionDetail(rgbImage, rawDepthImage, object_name)
+			if(not self._requestFreshDataFrame()): continue
+			vision = self._applyAndGetVisionDetail(object_name)
 			if vision == None:
 				continue
 			
@@ -365,6 +417,9 @@ class PrimitiveActions:
 					self.cartPose = tuple(ackPose)
 			except Exception:
 				print('invalid ack rcvd.')
+
+			loop_time = (time.perf_counter() - start_time) * 1000
+			print('|| Loop rate: %.2fms, %.1fHz ||' % (loop_time, 1000/loop_time))
 
 		if pick_and_return == False:
 			return None
@@ -395,9 +450,10 @@ class PrimitiveActions:
 
 		self.tkLabelCurrentText = 'Finding place target...'
 		while (not self.endScript and self.isEnacting and (targetPose) == None):
-			rgbImage = self.rgbd_frame[0]
-			rawDepthImage = self.rgbd_frame[1]
-			vision = self._applyAndGetVisionDetail(rgbImage, rawDepthImage, target_name)
+			start_time = time.perf_counter()
+
+			if(not self._requestFreshDataFrame()): continue
+			vision = self._applyAndGetVisionDetail(target_name)
 			if vision == None:
 				continue
 			# get next pose step and alignment
@@ -411,6 +467,9 @@ class PrimitiveActions:
 				break
 
 			self.cmndr.sendCommand(self.cartPose, awaitFeedback=True)
+			
+			loop_time = (time.perf_counter() - start_time) * 1000
+			print('|| Loop rate: %.2fms, %.1fHz ||' % (loop_time, 1000/loop_time))
 
 		self.tkLabelCurrentText = 'Found target pose...'
 		self._moveToHome() # take open gripper with nothing from target pose to home

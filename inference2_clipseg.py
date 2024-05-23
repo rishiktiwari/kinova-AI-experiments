@@ -1,6 +1,4 @@
 import socket
-import pickle
-import json
 import torch
 import threading
 import re
@@ -22,12 +20,9 @@ from primitiveActions import PrimitiveActions
 
 class Inference1(PrimitiveActions):
 	# HOST_IP = '192.168.1.114'
-	# HOST_IP = '192.168.1.100'
-	HOST_IP = '10.1.1.100'
+	HOST_IP = '192.168.1.100'
+	# HOST_IP = '10.1.1.100'
 	DATA_PORT = 9998
-	CHUNK_SIZE = 1024 # increasing makes it unreliable
-	ENCODING_FORMAT = 'utf-8'
-	PACK_FLAG = "[PACKET]"
 
 	def __init__(self):
 		super().__init__(self.HOST_IP)
@@ -45,7 +40,6 @@ class Inference1(PrimitiveActions):
 		tk.Button(text="Cancel Task", command=self.resetFlagsAndParams).pack()
 		tk.Button(text="Quit", command=self.cleanExit).pack()
 
-		self.socket_buffer = ''
 		self.package_queue = Queue()
 		
 		# self.checkAIDevice()
@@ -198,66 +192,33 @@ class Inference1(PrimitiveActions):
 
 
 
-	def getWordIndex(self, word: str, text: str, skip: int = 0):
-		i = -1
-		try:
-			i = str(text).index(word, skip)
-		except ValueError:
-			pass
-		return i
-
-
-
 	def cleanExit(self, evt = None):
 		if self.endScript == False: #to prevent recursive calls
 			self.endScript = True
 			self.resetFlagsAndParams()
 			self.cmndr.sendCommand('quit') # closes remote socket
 			self.cmndr.closeLink()
+			self.datalink_socket.sendall('quit'.encode(encoding=self.ENCODING_FORMAT))
+			try:
+				self.datalink_socket.shutdown(socket.SHUT_RDWR)
+				self.datalink_socket.close()
+			except: pass
 
 
 
 	def initDataLink(self):
 		time.sleep(1)
 		print('Data link started')
-		datalink_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+		self.datalink_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 		socket_address = (self.HOST_IP,self.DATA_PORT)
 
 		try:
-			datalink_socket.connect(socket_address)
+			self.datalink_socket.connect(socket_address)
 			print('Connected to host: ', socket_address)
 
-			pack_start = -1
-			pack_end = -1
-			pack_delimiter_len = len(self.PACK_FLAG)
-			while not self.endScript:
-				# await data length message
-				self.socket_buffer += datalink_socket.recv(self.CHUNK_SIZE).decode(encoding=self.ENCODING_FORMAT)
-
-				pack_start = self.getWordIndex(self.PACK_FLAG, self.socket_buffer)
-				pack_end = self.getWordIndex(self.PACK_FLAG, self.socket_buffer, pack_start+pack_delimiter_len) if (pack_start != -1) else -1
-
-				if(pack_start != -1 and pack_end > pack_start):
-					package = self.socket_buffer[pack_start+self.CHUNK_SIZE : pack_end]; # skips first chunk - length descriptor
-					self.socket_buffer = self.socket_buffer[pack_end:] # remove this package from buffer
-					print('Full data rcvd, size: %d, in-buf: %d' % (len(package), len(self.socket_buffer)))
-					self.package_queue.put(package)
-				else:
-					continue
-
-		except Exception as e:
+		except Exception or KeyboardInterrupt as e:
 			print(e)
-			print('Data link failed, closing')
-		except KeyboardInterrupt:
-			print('Keyboard interrupt')
-		finally:
-			print('Closing...')
-			datalink_socket.sendall('quit'.encode(encoding=self.ENCODING_FORMAT))
-			time.sleep(0.25) # for remote quit cmd to be rcvd
-			try:
-				datalink_socket.shutdown(socket.SHUT_RDWR)
-				datalink_socket.close()
-			except: pass
+			print('Data link interrupted, closing...')
 			self.cleanExit()
 
 
@@ -266,26 +227,11 @@ class Inference1(PrimitiveActions):
 		while not self.endScript:
 			self.tkLabelVar.set(self.tkLabelCurrentText) # refreshes label text
 			self.window.update()
-			
-			package = None
-			if not self.package_queue.empty():
-				package = self.package_queue.get()
-			else:
-				continue
 
-			try:
-				package = json.loads(package)
-				rgbd = pickle.loads(bytes(package['rgbd'], self.ENCODING_FORMAT), encoding='latin1')
-				# midDist = (depthImage[160][120] - 0.225)*100
-				# print('mid dist: %.1fcm' % midDist)
-				
-				# self.rgbd_frame_queue.put(rgbd, block=True, timeout=None)
-				self.rgbd_frame = rgbd
-				self.isFresh_rgbd = True
-
+			if (self.rgbd_frame[0] is not None and self.rgbd_frame[1] is not None):
 				cv.imshow(
 					'arm_vision',
-					np.concatenate((rgbd[0], self.normaliseDepthForPreview(rgbd[1], True)), axis=1)
+					np.concatenate((self.rgbd_frame[0], self.normaliseDepthForPreview(self.rgbd_frame[1], True)), axis=1)
 				)
 				cv.imshow('vlm_preview', np.concatenate(
 					(
@@ -297,10 +243,7 @@ class Inference1(PrimitiveActions):
 				# cv.imshow('depth_compute', self.vlm_depth_compute_frame)
 				cv.waitKey(1)
 
-			except Exception as e:
-				print(e)
-				print('data parse/preview failed')
-				
+
 			if (not self.isEnacting and not self.endScript and type(self.llmIntel) == Queue):
 				print('action available')	 
 				if self.llmIntel.qsize() != 0:
@@ -313,6 +256,8 @@ class Inference1(PrimitiveActions):
 
 					# start the primitive action function as thread
 					threading.Thread(target=action_def, args=action_args, daemon=False).start()
+			
+			time.sleep(0.2)
 
 
 
