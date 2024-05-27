@@ -6,6 +6,7 @@ import json
 import pickle
 import numpy as np
 import cv2 as cv
+from queue import Queue
 
 # clipseg stuff
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
@@ -27,10 +28,8 @@ class PrimitiveActions:
 	}
 
 	GRIPPER_LENGTH_CM = 22.5
-	DEPTH_OFFSET = 0.5 # real arm
-	# DEPTH_OFFSET = 2.5 # sim
+	DEPTH_OFFSET = 0.5
 	CONTOUR_THRESHOLD = 178
-	# CONTOUR_THRESHOLD = 128
 
 	def __init__(self, HOST_IP: str) -> None:
 		self.HOST_IP = HOST_IP
@@ -73,12 +72,15 @@ class PrimitiveActions:
 
 
 
-	def resetFlagsAndParams(self, evt = None) -> None:
+	def resetFlagsAndParams(self, clearActionQueue = False) -> None:
+		if clearActionQueue == True or (type(self.llmIntel) == Queue and self.llmIntel.qsize() == 0):
+			# clears actions queue when explicitly asked or when no items in the queue
+			self.llmIntel = None
+
 		self.isEnacting = False
 		self.isDetecting = False
 		self.isPlacing = False
 		self.grasped = False
-		self.llmIntel = None
 		self.tkLabelCurrentText = self.TK_DEF_LABEL
 		self.noObjFrames = 0
 		self.vlm_ann_rgbframe = np.zeros(shape=(100, 100, 3), dtype=np.uint8)
@@ -87,7 +89,8 @@ class PrimitiveActions:
 		self.gripperEst_samples = []
 		self.gripper = 0.0
 		self.cartPose = (0.3, 0.3, 0.3, 0.0)
-		self.cmndr.sendCommand(self.cartPose) # home the robot
+		self.cmndr.sendCommand(self.cartPose, awaitFeedback=True) # home the robot
+		time.sleep(3.0) # to let any remaining movement be completed
 		return None
 
 
@@ -410,7 +413,7 @@ class PrimitiveActions:
 				pickPose = tuple(nextPose)
 
 			ackPose = self.cmndr.sendCommand(self.cartPose, awaitFeedback=True)
-			print('\tcur: ', self.cartPose, 'fdbk: ', ackPose)
+			# print('\tcur: ', self.cartPose, 'fdbk: ', ackPose)
 			try:
 				ackPose = np.asarray(ackPose.split(' '), dtype=float)
 				if len(ackPose) == 4: # has four values

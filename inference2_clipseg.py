@@ -8,6 +8,7 @@ import tkinter as tk
 import time
 import ast
 from queue import Queue
+from functools import partial
 
 # llm stuff
 import torch
@@ -37,7 +38,7 @@ class Inference1(PrimitiveActions):
 		self.humanCmdInput.pack()
 		tk.Button(text="Send", command=self.getCmdEntryVal).pack()
 		self.window.bind('<Return>', self.getCmdEntryVal)
-		tk.Button(text="Cancel Task", command=self.resetFlagsAndParams).pack()
+		tk.Button(text="Cancel Task", command=partial(self.resetFlagsAndParams, clearActionQueue=True)).pack()
 		tk.Button(text="Quit", command=self.cleanExit).pack()
 
 		self.package_queue = Queue()
@@ -195,7 +196,7 @@ class Inference1(PrimitiveActions):
 	def cleanExit(self, evt = None):
 		if self.endScript == False: #to prevent recursive calls
 			self.endScript = True
-			self.resetFlagsAndParams()
+			self.resetFlagsAndParams(clearActionQueue=True)
 			self.cmndr.sendCommand('quit') # closes remote socket
 			self.cmndr.closeLink()
 			self.datalink_socket.sendall('quit'.encode(encoding=self.ENCODING_FORMAT))
@@ -245,8 +246,8 @@ class Inference1(PrimitiveActions):
 
 
 			if (not self.isEnacting and not self.endScript and type(self.llmIntel) == Queue):
-				print('action available')	 
-				if self.llmIntel.qsize() != 0:
+				print('action queue available')
+				if self.llmIntel.qsize() > 0:
 					print('starting action thread...')
 					action_name = self.llmIntel.get()
 					action_module = ast.parse(action_name)
