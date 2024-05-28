@@ -8,8 +8,9 @@ import numpy as np
 import cv2 as cv
 from queue import Queue
 
-# clipseg stuff
+# clipseg & deepsort stuff
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+from deep_sort_realtime.deepsort_tracker import DeepSort
 
 # custom class
 from commander import Commander
@@ -20,6 +21,7 @@ class PrimitiveActions:
 	CHUNK_SIZE = 1024 # increasing makes it unreliable
 	ENCODING_FORMAT = 'utf-8'
 	PACK_FLAG = "[PACKET]"
+	ENABLE_DEEPSORT = False
 
 	REQUIRED_ARGS = {
 		'pick': 1,
@@ -29,7 +31,7 @@ class PrimitiveActions:
 
 	GRIPPER_LENGTH_CM = 22.5
 	DEPTH_OFFSET = 0.5
-	CONTOUR_THRESHOLD = 178
+	CONTOUR_THRESHOLD = 125
 
 	def __init__(self, HOST_IP: str) -> None:
 		self.HOST_IP = HOST_IP
@@ -63,6 +65,8 @@ class PrimitiveActions:
 
 		self.clipseg_processor = CLIPSegProcessor.from_pretrained(VLM_NAME, cache_dir=VLM_CACHE_DIR)
 		self.clipseg_model = CLIPSegForImageSegmentation.from_pretrained(VLM_NAME, cache_dir=VLM_CACHE_DIR).to('cpu')
+		self.deepsortTracker = DeepSort(max_age=10) if self.ENABLE_DEEPSORT == True else None
+		print('Object Tracker (DeepSORT) active: %s' % str(self.ENABLE_DEEPSORT))
 
 		self.vlm_ann_rgbframe = np.zeros(shape=(100, 100, 3), dtype=np.uint8)
 		self.vlm_heatmap = np.zeros(shape=(100, 100), dtype=np.uint8)
@@ -198,7 +202,12 @@ class PrimitiveActions:
 		
 		# extract contours
 		(_, mask) = cv.threshold(norm_map, self.CONTOUR_THRESHOLD, 255, cv.THRESH_BINARY)
+		mask = cv.blur(mask, (15,15)) # to reduce holes by smudging/blurring, does cause extra padding in bbox
 		(detail['contours'], _) = cv.findContours(mask, cv.RETR_LIST, cv.CHAIN_APPROX_TC89_L1)
+
+		# fill contours if any holes
+		for cnt in detail['contours']:
+			cv.drawContours(mask,[cnt], 0, 255, -1)
 
 		if(len(detail['contours']) == 0):
 			print('no obj contours found')
@@ -216,6 +225,17 @@ class PrimitiveActions:
 
 		# calculate bbox from contours
 		(ox, oy, ow, oh) = cv.boundingRect(cnt)
+
+		if self.ENABLE_DEEPSORT == True:
+			bbox_confidence = 0.1 if min(ow,oh) < 10 else 0.7
+			bbs = [([ox,oy,ow,oh], bbox_confidence, 'label')] 
+			start_time = time.perf_counter()
+			deepsortTracks = self.deepsortTracker.update_tracks(bbs, frame=rgbImage)
+			for track in deepsortTracks:
+				if not track.is_confirmed(): continue
+			end_time = time.perf_counter()
+			print("deepSORT inference time: %.2fms" % ((end_time-start_time)*1000))
+			(ox, oy, ow, oh) = deepsortTracks[0].to_ltwh().astype(dtype=int) # get x,y,w,h of tracked object
 
 		# find rect, calculate moving avg, and draw obj bbox
 		self.bbox_samples.append((ox, oy, ow, oh))

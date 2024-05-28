@@ -30,6 +30,7 @@ class Commander:
 
 		self.script_start_time = time.perf_counter()
 		self.cmdlink_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+		self.cmdlink_socket.settimeout(600.0)
 		socket_address = (self.HOST_IP, self.HOST_PORT)
 
 		try:

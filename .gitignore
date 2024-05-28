@@ -1,6 +1,7 @@
 *
 
 !.gitignore
+!requirements.txt
 
 !chunkedReceiver.py
 !chunkedReceiverDelimited.py
@@ -12,3 +13,4 @@
 !phi3mini-q4.ipynb
 !cvChainTest.ipynb
 !cvChainTest_fastsam.ipynb
+!deepsort_test.ipynb

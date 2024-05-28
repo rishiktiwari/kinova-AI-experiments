@@ -211,6 +211,7 @@ class Inference1(PrimitiveActions):
 		time.sleep(1)
 		print('Data link started')
 		self.datalink_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+		self.datalink_socket.settimeout(600.0)
 		socket_address = (self.HOST_IP,self.DATA_PORT)
 
 		try:
