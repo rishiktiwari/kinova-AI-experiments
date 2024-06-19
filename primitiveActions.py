@@ -21,7 +21,8 @@ class PrimitiveActions:
 	CHUNK_SIZE = 1024 # increasing makes it unreliable
 	ENCODING_FORMAT = 'utf-8'
 	PACK_FLAG = "[PACKET]"
-	ENABLE_DEEPSORT = False
+	ENABLE_DEEPSORT = True
+	DEEPSORT_MAXAGE = 5
 
 	REQUIRED_ARGS = {
 		'pick': 1,
@@ -30,8 +31,8 @@ class PrimitiveActions:
 	}
 
 	GRIPPER_LENGTH_CM = 22.5
-	DEPTH_OFFSET = 0.5
-	CONTOUR_THRESHOLD = 125
+	DEPTH_OFFSET = 1
+	CONTOUR_THRESHOLD = 178
 
 	def __init__(self, HOST_IP: str) -> None:
 		self.HOST_IP = HOST_IP
@@ -65,7 +66,7 @@ class PrimitiveActions:
 
 		self.clipseg_processor = CLIPSegProcessor.from_pretrained(VLM_NAME, cache_dir=VLM_CACHE_DIR)
 		self.clipseg_model = CLIPSegForImageSegmentation.from_pretrained(VLM_NAME, cache_dir=VLM_CACHE_DIR).to('cpu')
-		self.deepsortTracker = DeepSort(max_age=10) if self.ENABLE_DEEPSORT == True else None
+		self.deepsortTracker = DeepSort(max_age=self.DEEPSORT_MAXAGE) if self.ENABLE_DEEPSORT == True else None
 		print('Object Tracker (DeepSORT) active: %s' % str(self.ENABLE_DEEPSORT))
 
 		self.vlm_ann_rgbframe = np.zeros(shape=(100, 100, 3), dtype=np.uint8)
@@ -81,6 +82,7 @@ class PrimitiveActions:
 			# clears actions queue when explicitly asked or when no items in the queue
 			self.llmIntel = None
 
+		self.deepsortTracker = DeepSort(max_age=self.DEEPSORT_MAXAGE) if self.ENABLE_DEEPSORT == True else None
 		self.isEnacting = False
 		self.isDetecting = False
 		self.isPlacing = False
@@ -273,7 +275,7 @@ class PrimitiveActions:
 		self.gripperEst_samples.append(round((rightmost[0]-leftmost[0])/120, 2))
 		self.gripperEst_samples = self.gripperEst_samples[-3:] # recent N values
 		samples_count = len(self.gripperEst_samples)
-		detail['grasp_estimate'] = min(0.8, max(0.4, round(sum(self.gripperEst_samples)/samples_count, 2))) # clamp value 0.4 <= grasp_estimate <= 0.8
+		detail['grasp_estimate'] = min(0.75, max(0.4, round(sum(self.gripperEst_samples)/samples_count, 2))) # clamp value 0.4 <= grasp_estimate <= 0.8
 
 		cv.circle(self.vlm_ann_rgbframe, leftmost, radius=3, color=(255,255,255), thickness=-1)
 		cv.circle(self.vlm_ann_rgbframe, rightmost, radius=3, color=(0,0,255), thickness=-1)
@@ -327,6 +329,9 @@ class PrimitiveActions:
 		if not self.isEnacting:
 			print("not enacting, skipping move to home")
 			return None
+		
+		# clear DeepSORT to for next sub-action
+		self.deepsortTracker = DeepSort(max_age=self.DEEPSORT_MAXAGE) if self.ENABLE_DEEPSORT == True else None
 
 		self.tkLabelCurrentText = 'Moving to home...'
 		print("\tmoving to home")
@@ -421,7 +426,7 @@ class PrimitiveActions:
 			mid_depth = vision['obj_mid_depth']
 			est_gripper = vision['grasp_estimate']
 
-			if (xAligned and yAligned and mid_depth < 1.5): # vertically aligned and reached dest
+			if (xAligned and yAligned and mid_depth < 2): # vertically aligned and reached dest
 				print('> --- grasp: %.1f%%' % (est_gripper*100,))
 				self.gripper = est_gripper
 				self.grasped = True
@@ -484,7 +489,7 @@ class PrimitiveActions:
 			self.cartPose = tuple(np.add(self.cartPose, (stepx, stepy, stepz, 0.0)))
 
 			mid_depth = vision['obj_mid_depth']
-			if (xAligned and yAligned and mid_depth < 3): # vertically aligned and reached dest
+			if (xAligned and yAligned and mid_depth <= 4+self.DEPTH_OFFSET): # vertically aligned and reached dest
 				targetPose = list(self.cartPose) # list because have to set gripper pose after picking
 				print('> --- noted target pose (%.2f %.2f %.2f %.2f)' % self.cartPose)
 				break
