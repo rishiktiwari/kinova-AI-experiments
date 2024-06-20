@@ -1,14 +1,23 @@
-*
+/*
+__pycache__/
+*.pyc
+.DS_Store
 
 !.gitignore
 !requirements.txt
+!README.md
+!web_assets/
 
 !chunkedReceiver.py
 !chunkedReceiverDelimited.py
-!commander.py
-!inference1_gdino.py
-!inference2_clipseg.py
-!primitiveActions.py
+
+!llm_models
+llm_models/*
+!llm_models/PLACE-LM-MODEL-HERE
+
+!embodied_ai
+embodied_ai/data_recordings/*
+!embodied_ai/data_recordings/.gitkeep
 
 !phi3mini-q4.ipynb
 !cvChainTest.ipynb

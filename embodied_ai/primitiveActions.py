@@ -436,6 +436,8 @@ class PrimitiveActions:
 			self.cartPose = tuple(nextPose)
 			if self.grasped:
 				pickPose = tuple(nextPose)
+			
+			vision_n_compute_time = (time.perf_counter() - start_time)*1000
 
 			ackPose = self.cmndr.sendCommand(self.cartPose, awaitFeedback=True)
 			# print('\tcur: ', self.cartPose, 'fdbk: ', ackPose)
@@ -447,7 +449,12 @@ class PrimitiveActions:
 				print('invalid ack rcvd.')
 
 			loop_time = (time.perf_counter() - start_time) * 1000
-			print('|| Loop rate: %.2fms, %.1fHz ||' % (loop_time, 1000/loop_time))
+			print('|| Loop rate: %.2fms, %.1fHz (compute: %.2fms, motion: %.2fms) ||\n' % (
+				loop_time,
+				1000/loop_time,
+				vision_n_compute_time,
+				loop_time - vision_n_compute_time
+			))
 
 		if pick_and_return == False:
 			return None
@@ -494,10 +501,17 @@ class PrimitiveActions:
 				print('> --- noted target pose (%.2f %.2f %.2f %.2f)' % self.cartPose)
 				break
 
+			vision_n_compute_time = (time.perf_counter() - start_time)*1000
+
 			self.cmndr.sendCommand(self.cartPose, awaitFeedback=True)
 			
 			loop_time = (time.perf_counter() - start_time) * 1000
-			print('|| Loop rate: %.2fms, %.1fHz ||' % (loop_time, 1000/loop_time))
+			print('|| Loop rate: %.2fms, %.1fHz (compute: %.2fms, motion: %.2fms) ||\n' % (
+				loop_time,
+				1000/loop_time,
+				vision_n_compute_time,
+				loop_time - vision_n_compute_time
+			))
 
 		self.tkLabelCurrentText = 'Found target pose...'
 		self._moveToHome() # take open gripper with nothing from target pose to home

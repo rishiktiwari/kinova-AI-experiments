@@ -1,3 +1,5 @@
+from os.path import abspath as os_abspath
+from os.path import dirname as os_dirname
 import socket
 import torch
 import threading
@@ -44,8 +46,10 @@ class Inference1(PrimitiveActions):
 		self.package_queue = Queue()
 		
 		# self.checkAIDevice()
+		lm_model_dir = os_abspath(os_dirname(__file__) + '/../llm_models')
+
 		self.llm = Llama(
-			model_path="./llm_models/Phi-3-mini-4k-instruct-q4.gguf",
+			model_path=lm_model_dir+"/Phi-3-mini-4k-instruct-q4.gguf",
 			n_ctx=4096,  # The max sequence length to use
 			n_threads=8,
 			n_gpu_layers=-1

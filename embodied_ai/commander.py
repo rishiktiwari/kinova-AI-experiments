@@ -2,6 +2,7 @@ import socket
 import threading
 import json
 import time
+from os.path import dirname as os_dirname
 from datetime import datetime
 
 class Commander:
@@ -11,7 +12,7 @@ class Commander:
 		self.ENCODING_FORMAT = 'utf-8'
 		self.HEADER_SIZE = 64
 		self.DELIMITER = '[CMD]'
-		self.LOG_DIR_PATH = "./data_recordings/"
+		self.LOG_DIR_PATH = os_dirname(__file__)+'/data_recordings/'
 
 		self.cmdlink_socket = None
 		self.log_file = None
