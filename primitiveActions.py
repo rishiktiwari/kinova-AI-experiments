@@ -21,7 +21,7 @@ class PrimitiveActions:
 	CHUNK_SIZE = 1024 # increasing makes it unreliable
 	ENCODING_FORMAT = 'utf-8'
 	PACK_FLAG = "[PACKET]"
-	ENABLE_DEEPSORT = True
+	ENABLE_DEEPSORT = False
 	DEEPSORT_MAXAGE = 5
 
 	REQUIRED_ARGS = {
